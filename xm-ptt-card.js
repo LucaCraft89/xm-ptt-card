@@ -91,7 +91,6 @@ class XmPttCard extends HTMLElement {
     }catch(e){ L.textContent="⛔ stop failed: "+e; }
   }
   async _start(cam){
-    if(cam==="all"){ const cams=this._cfg.cameras||[this._cfg.camera]; cam=cams[0]; this._log("PTT can't broadcast; using "+cam); }
     if(this._on) return; this._on=true; this._opened=false;
     const L=this._els.log,B=this._els.ptt,host=this._host();
     B.style.background="#e67e22"; B.textContent="⏳ starting…";
