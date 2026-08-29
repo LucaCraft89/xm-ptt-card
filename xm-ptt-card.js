@@ -1,5 +1,7 @@
-// XM PTT custom Lovelace card — runs in HA's origin so the mic works (no iframe).
+// XM Camera Talk custom Lovelace card — runs in HA's origin so mic + fetch work (no iframe).
+// PTT (hold-to-talk) + optional TTS, MP3/WAV play (URL or file), broadcast, and Stop.
 // Verbose: status shown to the user + console.debug("[xm-ptt] ...") for debugging.
+// Backward compatible: a PTT-only config (bridge + cameras) behaves exactly as before.
 class XmPttCard extends HTMLElement {
   setConfig(cfg){
     if(!cfg.bridge) throw new Error("xm-ptt-card: 'bridge' (host) is required");
@@ -9,31 +11,87 @@ class XmPttCard extends HTMLElement {
   getCardSize(){ return 3; }
   _log(m){ try{ console.debug("%c[xm-ptt]","color:#0a8;font-weight:bold",m); }catch(e){} }
   _host(){ return this._cfg.bridge.replace(/^wss?:\/\//,"").replace(/^https?:\/\//,"").replace(/\/$/,""); }
+  _https(){ return "https://"+this._host(); }
+  _tq(sep){ return this._cfg.token?(sep+"token="+encodeURIComponent(this._cfg.token)):""; }
   _render(){
-    const cams=this._cfg.cameras||[this._cfg.camera];
+    const c=this._cfg;
+    const cams=c.cameras||[c.camera];
+    const talk=c.talk!==false;                 // PTT on by default
+    const tts=!!c.tts, media=!!c.media;
+    const stop=(c.stop!==undefined)?!!c.stop:(tts||media); // stop auto-on with tts/media
+    const multi=cams.length>1;
+    const wantAll=multi&&(tts||media||stop);   // "all" only affects say/play/stop
     if(!this.shadowRoot) this.attachShadow({mode:"open"});
     const root=this.shadowRoot;
+    const inp="padding:.6em;border-radius:.6em;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color);font:inherit;width:100%;box-sizing:border-box";
+    const btn="border:0;border-radius:.7em;padding:.9em;font:600 1rem system-ui;color:#fff;cursor:pointer;width:100%";
     root.innerHTML=`
-      <ha-card header="${this._cfg.title||"Push-to-Talk"}">
-        <div style="padding:16px;display:flex;flex-direction:column;gap:12px">
-          ${cams.length>1?`<select id=cam style="padding:.6em;border-radius:.6em;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color);font:inherit">
-             ${cams.map(c=>`<option>${c}</option>`).join("")}</select>`:``}
-          <button id=ptt style="border:0;border-radius:.8em;padding:1.1em;font:600 1.05rem system-ui;color:#fff;background:#c0392b;user-select:none;touch-action:none;cursor:pointer">
-            🎙️ Hold to Talk${cams.length===1?` — ${cams[0]}`:``}</button>
+      <ha-card header="${c.title||"Camera Talk"}">
+        <div style="padding:16px;display:flex;flex-direction:column;gap:10px">
+          ${(multi)?`<select id=cam style="${inp}">
+             ${wantAll?`<option value="all">🔊 All cameras</option>`:``}
+             ${cams.map(x=>`<option>${x}</option>`).join("")}</select>`:``}
+          ${tts?`<textarea id=txt placeholder="Type a message to speak…" style="${inp};min-height:3em;resize:vertical"></textarea>
+             <button id=speak style="${btn};background:#2e7d32">📢 Speak</button>`:``}
+          ${media?`<input id=url placeholder="https://…/sound.mp3" style="${inp}">
+             <button id=playurl style="${btn};background:#2e7d32">▶️ Play from URL</button>
+             <input id=file type=file accept="audio/*" style="${inp}">
+             <button id=playfile style="${btn};background:#2e7d32">▶️ Play file</button>`:``}
+          ${stop?`<button id=stop style="${btn};background:#b71c1c">⏹️ Stop</button>`:``}
+          ${talk?`<button id=ptt style="${btn};background:#c0392b;user-select:none;touch-action:none">🎙️ Hold to Talk${(!multi)?` — ${cams[0]}`:``}</button>`:``}
           <div id=log style="font-size:.85rem;color:var(--secondary-text-color);min-height:1.2em;word-break:break-word">ready</div>
         </div>
       </ha-card>`;
     const $=id=>root.getElementById(id);
     this._els={ptt:$("ptt"),log:$("log"),cam:$("cam")};
-    if(!window.isSecureContext) this._els.log.textContent="⚠️ Open Home Assistant over https:// — the mic needs a secure context.";
     const camOf=()=> this._els.cam? this._els.cam.value : cams[0];
-    const b=this._els.ptt;
-    b.addEventListener("pointerdown",e=>{e.preventDefault();this._start(camOf());});
-    b.addEventListener("pointerup",e=>{e.preventDefault();this._end("idle");});
-    b.addEventListener("pointercancel",()=>this._end("idle"));
-    b.addEventListener("pointerleave",()=>{if(this._on)this._end("idle");});
+    // TTS
+    if(tts) $("speak").addEventListener("click",()=>this._post("/say",{cam:camOf(),text:$("txt").value.trim(),voice:c.voice||"en"},"speak",()=>$("txt").value.trim()));
+    // media URL
+    if(media){
+      $("playurl").addEventListener("click",()=>this._post("/play_url",{cam:camOf(),url:$("url").value.trim()},"play",()=>$("url").value.trim()));
+      $("playfile").addEventListener("click",()=>this._playFile(camOf(),$("file").files[0]));
+    }
+    // stop
+    if(stop) $("stop").addEventListener("click",()=>this._stop(camOf()));
+    // PTT
+    if(talk){
+      if(!window.isSecureContext) this._els.log.textContent="⚠️ Open Home Assistant over https:// — the mic needs a secure context.";
+      const b=this._els.ptt;
+      b.addEventListener("pointerdown",e=>{e.preventDefault();this._start(camOf());});
+      b.addEventListener("pointerup",e=>{e.preventDefault();this._end("idle");});
+      b.addEventListener("pointercancel",()=>this._end("idle"));
+      b.addEventListener("pointerleave",()=>{if(this._on)this._end("idle");});
+    }
+  }
+  async _post(path,body,verb,guard){
+    if(guard&&!guard()) return;
+    const cam=body.cam, L=this._els.log;
+    L.textContent=verb+"ing on "+cam+"…"; this._log(verb+" "+path+" cam="+cam);
+    try{
+      const r=await fetch(this._https()+path+this._tq("?"),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+      const d=await r.json();
+      L.textContent=d.ok?("✅ played on "+cam):("⛔ "+(d.err||JSON.stringify(d)));
+      this._log(verb+" result "+JSON.stringify(d));
+    }catch(e){ L.textContent="⛔ "+verb+" failed: "+e; this._log(verb+" error "+e); }
+  }
+  async _playFile(cam,f){
+    if(!f) return; const L=this._els.log;
+    L.textContent="uploading + playing on "+cam+"…"; this._log("play file "+f.name+" cam="+cam);
+    try{
+      const r=await fetch(this._https()+"/play?cam="+encodeURIComponent(cam)+this._tq("&"),{method:"POST",body:f});
+      const d=await r.json(); L.textContent=d.ok?("✅ played on "+cam):("⛔ "+(d.err||JSON.stringify(d)));
+    }catch(e){ L.textContent="⛔ play failed: "+e; }
+  }
+  async _stop(cam){
+    const L=this._els.log; this._log("stop cam="+cam);
+    try{
+      const r=await fetch(this._https()+"/stop?cam="+encodeURIComponent(cam)+this._tq("&"));
+      const d=await r.json(); L.textContent="⏹️ stopped: "+((d.stopped||[]).join(", ")||"(nothing playing)");
+    }catch(e){ L.textContent="⛔ stop failed: "+e; }
   }
   async _start(cam){
+    if(cam==="all"){ const cams=this._cfg.cameras||[this._cfg.camera]; cam=cams[0]; this._log("PTT can't broadcast; using "+cam); }
     if(this._on) return; this._on=true; this._opened=false;
     const L=this._els.log,B=this._els.ptt,host=this._host();
     B.style.background="#e67e22"; B.textContent="⏳ starting…";
@@ -49,9 +107,8 @@ class XmPttCard extends HTMLElement {
       else if(!window.isSecureContext||!navigator.mediaDevices) m="⚠️ Not a secure context — open HA over https://.";
       L.textContent=m; this._end(); return;
     }
-    const tok=this._cfg.token?("&token="+encodeURIComponent(this._cfg.token)):"";
-    const url="wss://"+host+"/ws?cam="+encodeURIComponent(cam)+tok;
-    L.textContent="connecting to "+host+" …"; this._log("ws connecting to "+host+(tok?" (with token)":" (no token)"));
+    const url="wss://"+host+"/ws?cam="+encodeURIComponent(cam)+this._tq("&");
+    L.textContent="connecting to "+host+" …"; this._log("ws connecting to "+host+(this._cfg.token?" (with token)":" (no token)"));
     try{ this._ws=new WebSocket(url); }
     catch(e){ this._log("ws ctor failed: "+e); L.textContent="⛔ Bad bridge address: "+host; this._end(); return; }
     this._ws.binaryType="arraybuffer";
@@ -99,14 +156,16 @@ class XmPttCard extends HTMLElement {
     try{this._stream&&this._stream.getTracks().forEach(t=>t.stop());}catch(e){}
     try{this._ws&&this._ws.close();}catch(e){}
     try{this._ctx&&this._ctx.close();}catch(e){}
-    const cams=this._cfg.cameras||[];
-    this._els.ptt.style.background="#c0392b";
-    this._els.ptt.textContent="🎙️ Hold to Talk"+(cams.length===1?" — "+cams[0]:"");
-    if(msg) this._els.log.textContent=msg;
+    if(this._els.ptt){
+      const cams=this._cfg.cameras||[this._cfg.camera];
+      this._els.ptt.style.background="#c0392b";
+      this._els.ptt.textContent="🎙️ Hold to Talk"+((cams.length===1)?" — "+cams[0]:"");
+    }
+    if(msg&&this._els.log) this._els.log.textContent=msg;
     if(wasOn) this._log("ended"+(this._sent?(" ("+Math.floor((this._sent||0)/8000)+"s sent)"):""));
     this._sent=0;
   }
 }
 if(!customElements.get("xm-ptt-card")) customElements.define("xm-ptt-card", XmPttCard);
 window.customCards=window.customCards||[];
-window.customCards.push({type:"xm-ptt-card",name:"XM Push-to-Talk",description:"Hold-to-talk to XM/iCSee cameras via the talk bridge"});
+window.customCards.push({type:"xm-ptt-card",name:"XM Camera Talk",description:"Talk, TTS, media playback + push-to-talk to XM/iCSee cameras via the talk bridge"});

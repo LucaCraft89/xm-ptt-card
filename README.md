@@ -2,9 +2,11 @@
 
 ![XM Push-to-Talk Card](banner.png)
 
-A Home Assistant **custom Lovelace card** that turns a dashboard button into
-live **push-to-talk** for XM / iCSee cameras. Hold the button, talk, and your
-voice comes out the camera's speaker.
+A Home Assistant **custom Lovelace card** for talking to XM / iCSee cameras.
+Hold to talk live (**push-to-talk**), speak **text-to-speech**, play an **MP3/WAV**
+(from a URL or a file), **broadcast** to all cameras at once, and **stop**
+playback mid-way — all from one card. Push-to-talk is enabled by default; the
+rest are opt-in flags (see Options).
 
 It pairs with the **[xm-cam-talk](https://github.com/LucaCraft89/xm-cam-talk)**
 bridge (which speaks the cameras' DVRIP `OPTalk` protocol). The card captures
@@ -21,14 +23,21 @@ microphone works — unlike an `<iframe>`, where browsers block the mic.
 
 ```yaml
 type: custom:xm-ptt-card
-title: Push-to-Talk
+title: Camera Talk
 bridge: talk.example.com     # your talk-bridge host, behind an HTTPS reverse proxy
 token: your-talk-token       # only if the bridge sets TALK_TOKEN
 cameras: [cam2, cam3, cam4]  # or a single: camera: cam3
+tts: true                    # add a text-to-speech box + Speak button
+media: true                  # add play-from-URL + play-file buttons
+stop: true                   # add a Stop button (default on when tts/media set)
+# talk: false                # hide push-to-talk (it's on by default)
 ```
 
-Hold **Hold to Talk** and speak. First use prompts for microphone permission —
-allow it for your Home Assistant URL.
+For a **push-to-talk-only** card, just set `bridge` + `cameras` — the extra
+features stay hidden. With multiple cameras and any of `tts`/`media`/`stop`, the
+dropdown gains an **All cameras** option (broadcast); push-to-talk itself is
+always single-camera. First use prompts for microphone permission — allow it for
+your Home Assistant URL.
 
 ## Dependency: the xm-cam-talk bridge + integration
 
@@ -60,7 +69,12 @@ Home Assistant itself must also be opened over **HTTPS** (secure context for
 | `token` | no | `TALK_TOKEN` if the bridge is protected. |
 | `cameras` | one of | List of camera names → shows a dropdown. |
 | `camera` | these | A single camera name (no dropdown). |
-| `title` | no | Card header text. |
+| `title` | no | Card header text (default `Camera Talk`). |
+| `talk` | no | Push-to-talk button. Default `true`. |
+| `tts` | no | Text-to-speech box + Speak button. Default `false`. |
+| `media` | no | Play-from-URL + play-file buttons. Default `false`. |
+| `stop` | no | Stop button. Default `true` when `tts`/`media` are set. |
+| `voice` | no | espeak-ng voice for TTS. Default `en`. |
 
 ## Troubleshooting
 
