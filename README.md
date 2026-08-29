@@ -62,6 +62,23 @@ Home Assistant itself must also be opened over **HTTPS** (secure context for
 | `camera` | these | A single camera name (no dropdown). |
 | `title` | no | Card header text. |
 
+## Troubleshooting
+
+The card's **status line** always shows what's happening, and it logs every
+step to the browser **dev-tools Console** with a `[xm-ptt]` prefix. Common
+statuses:
+
+| Status | Meaning / fix |
+|--------|---------------|
+| `requesting microphone…` then `🔒 Microphone blocked` | Allow the mic for your HA site (address-bar lock → Microphone → Allow). Not the HA in-app browser. |
+| stuck on `connecting to <host> …` then `⚠️ No response from the bridge` | The browser can't reach the bridge host. On home Wi-Fi this is a DNS/hairpin issue — add a local DNS rewrite so `bridge` resolves to your reverse proxy's LAN IP. On mobile data it should connect. |
+| `⛔ Unauthorized` | The card `token` doesn't match the bridge `TALK_TOKEN`. |
+| `🔴 live → cam — talk now` | Connected; you're talking. |
+
+The console shows the WebSocket close **code** (`1006` = network/unreachable,
+`1008/4401` = auth) to pinpoint the cause. The bridge side logs the matching
+`ws OPEN/CLOSE` lines (`docker logs -f talk-bridge`).
+
 ## License
 
 MIT. Not affiliated with XM, iCSee, or Home Assistant.
